@@ -1,0 +1,18 @@
+{
+  "presets": [
+    "@babel/preset-env"
+  ],
+  "plugins": [
+        [
+            "module-resolver",
+            {
+                "root": [
+                    "./src"
+                ],
+                "alias": {
+                    "fgc": "./src/packages/fgc-common-js-src/export-node",
+                }
+            }
+        ]
+    ]
+}

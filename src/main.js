@@ -9,9 +9,9 @@ import sqlite3                      from 'better-sqlite3';
 import * as consts                  from 'consts';
 import Discord                      from 'discord.js';
 import * as env                     from 'env';
-import { crypto, util }             from 'fgc';
+import { assert, crypto, util }     from 'fgc';
 import fs                           from 'fs';
-import fetch                       from 'node-fetch';
+import fetch                        from 'node-fetch';
 import url                          from 'url';
 import { vol }                      from 'vol';
 import _                            from 'lodash';
@@ -40,6 +40,15 @@ const TRANSACTION_TYPE = {
     REGISTER_MINER:     'REGISTER_MINER',
 }
 
+export const VOL_MAKER = {
+    gratuity:           0,
+    profitShare:        0,
+    transferTax:        0,
+    accountName:        false,
+    keyName:            'master',
+    nonce:              -1,
+};
+
 //----------------------------------------------------------------//
 function fetchJSON ( endpoint, init ) {
     return fetch ( endpoint, init ).then ( res => res.json ());
@@ -51,23 +60,21 @@ function fetchJSON ( endpoint, init ) {
 class Volbot {
 
     //----------------------------------------------------------------//
-    checkExists ( networkID, paramString ) {
+    checkExists ( paramString ) {
 
-        const exists = this.db.prepare ( `SELECT id FROM transactions WHERE network IS ? AND params IS ?` ).get ( networkID, paramString );
+        const exists = this.db.prepare ( `SELECT id FROM transactions WHERE params IS ?` ).get ( paramString );
         return Boolean ( exists );
     }
 
     //----------------------------------------------------------------//
-    async checkTransactionStatusAsync ( networkID, row ) {
-
-        const network = this.networks [ networkID ];
+    async checkTransactionStatusAsync ( row ) {
 
         const checkStatus = async ( nodeURL ) => {
 
             try {
 
                 let accountURL          = url.parse ( nodeURL );
-                accountURL.pathname     = `/accounts/${ network.accountID }/transactions/${ row.uuid }`;
+                accountURL.pathname     = `/accounts/${ this.accountID }/transactions/${ row.uuid }`;
                 accountURL              = url.format ( accountURL );
 
                 const result            = await fetchJSON ( accountURL );
@@ -101,7 +108,7 @@ class Volbot {
         }
 
         const promises = [];
-        for ( let nodeURL of network.miners ) {
+        for ( let nodeURL of this.miners ) {
             promises.push ( checkStatus ( nodeURL ));
         }
         const results = await Promise.all ( promises );
@@ -144,18 +151,20 @@ class Volbot {
 
         this.networks = _.cloneDeep ( consts.VOL_NETWORKS );
 
-        for ( let networkID in this.networks ) {
-            const network = this.networks [ networkID ];
-            const phraseOrPEM = fs.readFileSync ( network.keyfile, 'utf8' );
-            network.key = await crypto.loadKeyAsync ( phraseOrPEM );
-        }
+        this.accountID      = consts.VOL_NETWORK.accountID;
+        this.genesis        = consts.VOL_NETWORK.genesis;
+        this.friendlyName   = consts.VOL_NETWORK.friendlyName;
+        this.miners         = consts.VOL_NETWORK.miners;
+        this.keyfile        = consts.VOL_NETWORK.keyfile;
+
+        const phraseOrPEM = fs.readFileSync ( this.keyfile, 'utf8' );
+        this.key = await crypto.loadKeyAsync ( phraseOrPEM );
 
         this.db = new sqlite3 ( 'sqlite.db' );
 
         this.db.prepare (`
             CREATE TABLE IF NOT EXISTS transactions (
                 id              INTEGER         PRIMARY KEY,
-                network         TEXT            NOT NULL,
                 uuid            TEXT            NOT NULL,
                 type            TEXT            NOT NULL,
                 status          TEXT            NOT NULL DEFAULT 'NEW',
@@ -184,16 +193,14 @@ class Volbot {
     }
 
     //----------------------------------------------------------------//
-    async findNonceAsync ( networkID ) {
-
-        const network = this.networks [ networkID ];
+    async findNonceAsync () {
 
         const getNonce = async ( nodeURL ) => {
 
             try {
 
                 const accountURL        = url.parse ( nodeURL );
-                accountURL.pathname     = `/accounts/${ network.accountID }`;
+                accountURL.pathname     = `/accounts/${ this.accountID }`;
                 let result              = await fetchJSON ( url.format ( accountURL ));
 
                 return result && result.account && result.account.nonce;
@@ -205,7 +212,7 @@ class Volbot {
         }
 
         const promises = [];
-        for ( let nodeURL of network.miners ) {
+        for ( let nodeURL of this.miners ) {
             promises.push ( getNonce ( nodeURL ));
         }
         const results = await Promise.all ( promises );
@@ -221,15 +228,9 @@ class Volbot {
     }
 
     //----------------------------------------------------------------//
-    makeTransaction ( type, networkID, params, uuid, nonce ) {
-
-        const network = this.networks [ networkID ];
-                if ( !network ) return false;
+    makeTransaction ( type, params, uuid, nonce ) {
 
         let body = false;
-
-        const maker = _.cloneDeep ( consts.VOL_MAKER );
-        maker.accountName = network.accountID;
 
         switch ( type ) {
 
@@ -238,31 +239,35 @@ class Volbot {
                 const request = vol.decodeAccountRequest ( params.encoded );
 
                 body = {
-                    type:       type,
-                    uuid:       uuid,
                     suffix:     params.suffix,
                     key:        request.key,
-                    grant:      0,
-                    maker:      maker,
+                    grant:      0
                 };
 
                 break;
             }
 
             case TRANSACTION_TYPE.REGISTER_MINER: {
+                
+                body = _.cloneDeep ( params );
                 break;
             }
         }
 
         if ( !body ) return;
 
-        return vol.signTransaction ( network.key, body, nonce );
+        const maker = _.cloneDeep ( VOL_MAKER );
+        maker.accountName = this.accountID;
+
+        body.type       = type;
+        body.uuid       = uuid;
+        body.maker      = maker;
+
+        return vol.signTransaction ( this.key, body, nonce );
     }
 
     //----------------------------------------------------------------//
-    async notifyAcceptedAsync ( networkID, row ) {
-
-        const network = this.networks [ networkID ];
+    async notifyAcceptedAsync ( row ) {
 
         if ( !( row.channel && row.mention )) return;
         const channel = await this.client.channels.fetch ( row.channel );
@@ -273,12 +278,13 @@ class Volbot {
         switch ( row.type ) {
 
             case TRANSACTION_TYPE.OPEN_ACCOUNT: {
-                const accountName = `.${ network.accountID }.${ params.suffix }`;
+                const accountName = `.${ this.accountID }.${ params.suffix }`;
                 channel.send ( `Fantastic news, <@${ row.mention }>! Your transaction of type ${ row.type } was ACCEPTED! Your new account is named: ${ accountName }` );
                 break;
             }
 
             case TRANSACTION_TYPE.REGISTER_MINER: {
+                channel.send ( `Congratulations, <@${ row.mention }>! Your account '${ params.accountName }' is now a miner!` );
                 break;
             }
         }
@@ -306,12 +312,12 @@ class Volbot {
         switch ( command ) {
 
             case BOT_COMMANDS.ACCOUNT: {
-                this.scheduleTransaction_openAccount ( message, tokens );
+                await this.scheduleTransaction_openAccount ( message, tokens );
                 break;
             }
 
             case BOT_COMMANDS.UPGRADE: {
-                this.scheduleTransaction_registerMiner ( message, tokens );
+                await this.scheduleTransaction_registerMiner ( message, tokens );
                 break;
             }
 
@@ -330,31 +336,27 @@ class Volbot {
     //----------------------------------------------------------------//
     async processQueueAsync () {
 
-        for ( let networkID in this.networks ) {
-            await this.processQueueAsync_newTransactions ( networkID );
-            await this.processQueueAsync_pendingTransactions ( networkID );
-        }
+        await this.processQueueAsync_newTransactions ();
+        await this.processQueueAsync_pendingTransactions ();
     }
 
     //----------------------------------------------------------------//
-    async processQueueAsync_newTransactions ( networkID ) {
+    async processQueueAsync_newTransactions () {
 
         // get all NEW transactions
         //      if NEW transactions, find the nonce (all miners agree)
         //      if no nonce, skip
         //      prepare envelopes and update to PENDING
 
-        const network = this.networks [ networkID ];
-
-        const rows = this.db.prepare ( `SELECT * FROM transactions WHERE network IS ? AND status IS 'NEW'` ).all ( networkID );
+        const rows = this.db.prepare ( `SELECT * FROM transactions WHERE status IS 'NEW'` ).all ();
         if ( rows.length === 0 ) return;
 
-        let nonce = await this.findNonceAsync ( networkID );
+        let nonce = await this.findNonceAsync ();
         if ( nonce === false ) return;
 
         for ( let row of rows ) {
             const params = JSON.parse ( row.params );
-            const envelope = this.makeTransaction ( row.type, networkID, params, row.uuid, nonce++ );
+            const envelope = this.makeTransaction ( row.type, params, row.uuid, nonce++ );
 
             this.db.prepare (`
                 UPDATE transactions SET status = 'PENDING', envelope = ? WHERE id = ?
@@ -363,7 +365,7 @@ class Volbot {
     }
 
     //----------------------------------------------------------------//
-    async processQueueAsync_pendingTransactions ( networkID ) {
+    async processQueueAsync_pendingTransactions () {
 
         // get all PENDING transactions
         //      check status with all miners
@@ -371,16 +373,16 @@ class Volbot {
         //      if all ACCEPTED, mark as ACCEPTED
         //      if any REJECTED, mark REJECTED then reset all PENDING to NEW
 
-        const rows = this.db.prepare ( `SELECT * FROM transactions WHERE network IS ? AND status IS 'PENDING'` ).all ( networkID );
+        const rows = this.db.prepare ( `SELECT * FROM transactions WHERE status IS 'PENDING'` ).all ();
         if ( rows.length === 0 ) return;
 
         for ( let row of rows ) {
 
-            const status = await this.checkTransactionStatusAsync ( networkID, row );
+            const status = await this.checkTransactionStatusAsync ( row );
 
             if ( status === TRANSACTION_STATUS.ACCEPTED ) {
                 this.db.prepare ( `UPDATE transactions SET status = 'ACCEPTED' WHERE id = ?` ).run ( row.id );
-                await this.notifyAcceptedAsync ( networkID, row );
+                await this.notifyAcceptedAsync ( row );
             }
             else if ( status === TRANSACTION_STATUS.REJECTED ) {
                 this.db.prepare ( `UPDATE transactions SET status = 'REJECTED' WHERE id = ?` ).run ( row.id );
@@ -398,7 +400,7 @@ class Volbot {
     }
 
     //----------------------------------------------------------------//
-    scheduleTransaction ( message, networkID, type, params ) {
+    scheduleTransaction ( message, type, params ) {
 
         const paramString   = JSON.stringify ( params );
         const uuid          = util.generateUUIDV4 ();
@@ -406,14 +408,20 @@ class Volbot {
         const mention       = message.author.id; // the snowflake
 
         this.db.prepare (`
-            INSERT INTO transactions ( network, uuid, type, params, channel, mention ) VALUES ( ?, ?, ?, ?, ?, ? )
-        `).run ( networkID, uuid, type, paramString, channel, mention );
+            INSERT INTO transactions ( uuid, type, params, channel, mention ) VALUES ( ?, ?, ?, ?, ? )
+        `).run ( uuid, type, paramString, channel, mention );
     }
 
     //----------------------------------------------------------------//
-    scheduleTransaction_openAccount ( message, tokens ) {
+    async scheduleTransaction_openAccount ( message, tokens ) {
 
         const encoded = tokens.join ();
+
+        if ( !encoded ) {
+            message.reply ( `you need to give me a valid account request.` );
+            return;
+        }
+        
         const request = vol.decodeAccountRequest ( encoded );
 
         if ( !request ) {
@@ -433,17 +441,12 @@ class Volbot {
             return;
         }
 
-        const networkID = consts.VOL_NETWORKS_BY_GENESIS [ request.genesis ];
-        const network = this.networks [ networkID ];
-
-        if ( !network ) {
+        if ( this.genesis !== request.genesis ) {
             message.reply ( `sorry, I don't recognize that network.` );
-            console.log ( 'UNKNOWN NETWORK', networkID );
-            console.log ( 'FOR GENESIS:', request.genesis );
             return;
         }
 
-        if ( this.checkExists ( networkID, encoded )) {
+        if ( this.checkExists ( encoded )) {
             message.reply ( `looks like that's already in my queue` );
             return false;
         }
@@ -453,55 +456,109 @@ class Volbot {
             encoded: encoded,
         }
 
-        this.scheduleTransaction ( message, networkID, TRANSACTION_TYPE.OPEN_ACCOUNT, params );
-        message.reply ( `OK, I enqueued your request for a new account on the ${ network.friendlyName } network.` );
+        this.scheduleTransaction ( message, TRANSACTION_TYPE.OPEN_ACCOUNT, params );
+        message.reply ( `OK, I enqueued your request for a new account on the ${ this.friendlyName } network.` );
     }
 
     //----------------------------------------------------------------//
-    scheduleTransaction_registerMiner ( message, tokens ) {
+    async scheduleTransaction_registerMiner ( message, tokens ) {
 
-        // const encoded = tokens.join ();
-        // const request = vol.decodeAccountRequest ( encoded );
+        let nodeURL = tokens [ 0 ];
 
-        // if ( !request ) {
-        //     message.reply ( `I could not decode that account request.` );
-        //     return;
-        // }
+        if ( !nodeURL ) {
+            message.reply ( `you need to give me a valid node URL.` );
+            return;
+        }
 
-        // console.log ( 'DECODED ACCOUNT REQUEST:', request );
+        nodeURL = url.format ( url.parse ( nodeURL ));
+        let minerID = false;
 
-        // if ( !request.genesis ) {
-        //     message.reply ( `that account request is missing a genesis hash. Try again.` );
-        //     return;
-        // }
+        try {
+            const node = await fetchJSON ( nodeURL );
+            assert ( node );
 
-        // if ( !request.key ) {
-        //     message.reply ( `that account request is missing a public key. Try again.` );
-        //     return;
-        // }
+            if ( node.type !== 'VOL_MINING_NODE' ) {
+                message.reply ( `I don't think that's a node.` );
+                return;
+            }
 
-        // const networkID = consts.VOL_NETWORKS_BY_GENESIS [ request.genesis ];
-        // const network = this.networks [ networkID ];
+            if ( node.genesis !== this.genesis ) {
+                message.reply ( `that looks like a node, but not one in my network.` );
+                return;
+            }
 
-        // if ( !network ) {
-        //     message.reply ( `sorry, I don't recognize that network.` );
-        //     console.log ( 'UNKNOWN NETWORK', networkID );
-        //     console.log ( 'FOR GENESIS:', request.genesis );
-        //     return;
-        // }
+            if ( node.isMiner ) {
+                message.reply ( `that node is already a miner.` );
+                return;
+            }
 
-        // if ( this.checkExists ( networkID, encoded )) {
-        //     message.reply ( `looks like that's already in my queue` );
-        //     return false;
-        // }
+            minerID = node.minerID;
+        }
+        catch ( error ) {
+            message.reply ( `I couldn't reach ${ nodeURL }; it may be offline or not a node.` );
+            return;
+        }
 
-        // const params = {
-        //     suffix: vol.makeAccountSuffix (),
-        //     encoded: encoded,
-        // }
+        try {
 
-        // this.scheduleTransaction ( message, networkID, TRANSACTION_TYPE.OPEN_ACCOUNT, params );
-        // message.reply ( `OK, I enqueued your request for a new account on the ${ network.friendlyName } network.` );
+            assert ( minerID !== false );
+
+            const accountURL = url.parse ( this.miners [ 0 ]);
+            accountURL.pathname = `/accounts/${ minerID }`;
+
+            const response = await fetchJSON ( `${ url.format ( accountURL )}` );
+            assert ( response );
+
+            const account = response.account;
+            
+            if ( !account ) {
+                message.reply ( `I couldn't find an account to upgrade named '${ minerID }'. Did you remember to rename?` );
+                return;
+            }
+        }
+        catch ( error ) {
+            message.reply ( `I encountered an HTTP error trying to find an account for that node.` );
+            return;
+        }
+
+        let minerInfo = false;
+
+        try {
+
+            const minerURL = url.parse ( nodeURL );
+            minerURL.pathname = `/node`;
+
+            const response = await fetchJSON ( url.format ( minerURL ));
+            assert ( response && response.node );
+
+            const node = response.node;
+
+            minerInfo = {
+                key:        node.publicKey,
+                motto:      node.motto,
+                url:        nodeURL,
+                visage:     node.visage,
+            };
+        }
+        catch ( error ) {
+            message.reply ( `I couldn't fetch miner info for ${ minerID }; it may be offline or not a node.` );
+            return;
+        }
+
+        if ( !minerInfo ) {
+            message.reply ( `I ran into a problem finding the miner info for that node. Contact and administrator.` );
+            return;
+        }
+
+        const params = {
+            accountName:    minerID,
+            minerInfo:      minerInfo,
+        }
+
+        console.log ( params );
+
+        this.scheduleTransaction ( message, TRANSACTION_TYPE.REGISTER_MINER, params );
+        message.reply ( `OK, I enqueued your request to upgrade account ${ minerID } to a miner.` );
     }
 }
 

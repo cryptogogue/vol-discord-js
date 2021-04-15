@@ -22,6 +22,8 @@ const BOT_PREFIX = 'volbot,'
 
 const BOT_COMMANDS = {
     ACCOUNT:                'account',
+    HELP:                   'help',
+    INFO:                   'info',
     UPGRADE:                'upgrade',
 }
 
@@ -40,7 +42,7 @@ const TRANSACTION_TYPE = {
     REGISTER_MINER:     'REGISTER_MINER',
 }
 
-export const VOL_MAKER = {
+const VOL_MAKER = {
     gratuity:           0,
     profitShare:        0,
     transferTax:        0,
@@ -48,6 +50,13 @@ export const VOL_MAKER = {
     keyName:            'master',
     nonce:              -1,
 };
+
+const HELP_TEXT = `
+    <bot>, account <account request> - paste an account request from your wallet to provision a new account.
+    <bot>, help - display again this very message you are reading right now.
+    <bot>, info - learn interesting facts about this bot.
+    <bot>, upgrade <node URL> - upgrade the node at this URL to a miner.
+`
 
 //----------------------------------------------------------------//
 function fetchJSON ( endpoint, init ) {
@@ -230,31 +239,7 @@ class Volbot {
     //----------------------------------------------------------------//
     makeTransaction ( type, params, uuid, nonce ) {
 
-        let body = false;
-
-        switch ( type ) {
-
-            case TRANSACTION_TYPE.OPEN_ACCOUNT: {
-
-                const request = vol.decodeAccountRequest ( params.encoded );
-
-                body = {
-                    suffix:     params.suffix,
-                    key:        request.key,
-                    grant:      0
-                };
-
-                break;
-            }
-
-            case TRANSACTION_TYPE.REGISTER_MINER: {
-                
-                body = _.cloneDeep ( params );
-                break;
-            }
-        }
-
-        if ( !body ) return;
+        const body = _.cloneDeep ( params );
 
         const maker = _.cloneDeep ( VOL_MAKER );
         maker.accountName = this.accountID;
@@ -313,6 +298,16 @@ class Volbot {
 
             case BOT_COMMANDS.ACCOUNT: {
                 await this.scheduleTransaction_openAccount ( message, tokens );
+                break;
+            }
+
+            case BOT_COMMANDS.HELP: {
+                message.reply ( `\`\`\`${ HELP_TEXT }\`\`\`` );
+                break;
+            }
+
+            case BOT_COMMANDS.INFO: {
+                message.reply ( `I am the bot that manages the ${ this.friendlyName } network. Its genesis hash is: \`\`\`${ this.genesis }\`\`\`` );
                 break;
             }
 
@@ -452,8 +447,9 @@ class Volbot {
         }
 
         const params = {
-            suffix: vol.makeAccountSuffix (),
-            encoded: encoded,
+            suffix:     vol.makeAccountSuffix (),
+            key:        request.key,
+            grant:      0,
         }
 
         this.scheduleTransaction ( message, TRANSACTION_TYPE.OPEN_ACCOUNT, params );
@@ -554,8 +550,6 @@ class Volbot {
             accountName:    minerID,
             minerInfo:      minerInfo,
         }
-
-        console.log ( params );
 
         this.scheduleTransaction ( message, TRANSACTION_TYPE.REGISTER_MINER, params );
         message.reply ( `OK, I enqueued your request to upgrade account ${ minerID } to a miner.` );

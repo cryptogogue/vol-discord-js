@@ -8,15 +8,14 @@ export const RESULT_STATUS = {
 };
 
 export const VOL_NETWORK = {
-    accountID:      '9090',
-    genesis:        '5bde56acf2d358722cae2d24f3c8c34a276a13f1d1078cdf1f31a888380bf83d',
-    friendlyName:   `Patrick's Local Test Net`,
+    accountID:      'beta',
+    genesis:        '3bf3e4bd5c5dd25afb314aca5d4273f445218a815cdd5ce027d14c74328837c8',
+    friendlyName:   `Volition Open Beta`,
     miners: [
-        'http://localhost:9090',
-        // 'https://beta.volitionccg.com',
-        // 'https://volition.bulbousbouffant.com',
-        // 'https://volition.tlopps.com',
-        // 'https://volition.crypto-games.co.uk',
+        'https://beta.volitionccg.com',
+        'https://volition.bulbousbouffant.com',
+        'https://volition.tlopps.com',
+        'https://volition.crypto-games.co.uk',
     ],
-    keyfile: '.keys/key9090.priv.pem',
+    keyfile: '.keys/beta.priv.pem',
 }

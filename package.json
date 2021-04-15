@@ -50,6 +50,7 @@
   "scripts": {
     "build": "babel src/main.js -d dist",
     "start": "nodemon --exec babel-node -r dotenv/config src/main.js dotenv_config_path=./volume-volbot/.env",
+    "prod": "babel-node -r dotenv/config src/main.js dotenv_config_path=./volume-volbot/.env",
     "test": "jest --setupFiles dotenv/config --runInBand",
     "test:watch": "jest --watch --setupFiles dotenv/config --runInBand"
   },

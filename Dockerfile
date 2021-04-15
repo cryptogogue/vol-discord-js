@@ -33,4 +33,4 @@ RUN npm install \
 COPY . /app
 
 ENTRYPOINT [ "npm" ]
-CMD [ "start" ]
+CMD [ "run", "prod" ]

@@ -1,0 +1,37 @@
+/* eslint-disable no-whitespace-before-property */
+
+export const VOL_NETWORK = {
+    accountID:      'beta',
+    genesis:        '3bf3e4bd5c5dd25afb314aca5d4273f445218a815cdd5ce027d14c74328837c8',
+    friendlyName:   `Volition Open Beta`,
+    miners: [
+        'https://beta.volitionccg.com',
+        'https://volition.bulbousbouffant.com',
+        'https://volition.tlopps.com',
+        'https://volition.crypto-games.co.uk',
+    ],
+    keyfile: './volume-volbot/.keys/beta.priv.pem',
+}
+
+export const SQLITE_FILE = './volume-volbot/sqlite.db'
+
+export const BOT_PREFIX = 'volbot,'
+
+export const BOT_COMMANDS = {
+    ACCOUNT:                'account',
+    HELP:                   'help',
+    INFO:                   'info',
+    UPGRADE:                'upgrade',
+}
+
+export const CHANNEL_IDS = {
+    VOLBOT:             '831890901902426132',
+    BETA_MINING:        '783826184400011264',
+}
+
+export const COMMAND_RESTRICTIONS = {
+    [ BOT_COMMANDS.ACCOUNT ]:   [ CHANNEL_IDS.VOLBOT, CHANNEL_IDS.BETA_MINING ],
+    [ BOT_COMMANDS.UPGRADE ]:   [ CHANNEL_IDS.BETA_MINING ],
+}
+
+export const SERVICE_INTERVAL = 5000;

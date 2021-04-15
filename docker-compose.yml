@@ -1,0 +1,12 @@
+#!/bin/bash
+
+version: '3.5'
+
+services:
+
+    webservice:
+        container_name: volbot
+        build: ./
+        image: volbot
+        volumes:
+             - ./volume-volbot:/app/volume-volbot

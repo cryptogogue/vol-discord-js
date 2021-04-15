@@ -6,7 +6,7 @@ process.on ( 'uncaughtException', function ( err ) {
 });
 
 import sqlite3                      from 'better-sqlite3';
-import * as consts                  from 'consts';
+import * as config                  from 'config';
 import Discord                      from 'discord.js';
 import * as env                     from 'env';
 import { assert, crypto, util }     from 'fgc';
@@ -18,16 +18,12 @@ import _                            from 'lodash';
 
 // https://discord.js.org/#/
 
-const BOT_PREFIX = 'volbot,'
-
-const BOT_COMMANDS = {
-    ACCOUNT:                'account',
-    HELP:                   'help',
-    INFO:                   'info',
-    UPGRADE:                'upgrade',
-}
-
-const SERVICE_INTERVAL = 5000;
+const BOT_PREFIX                = config.BOT_PREFIX;
+const BOT_COMMANDS              = config.BOT_COMMANDS;
+const COMMAND_RESTRICTIONS      = config.COMMAND_RESTRICTIONS;
+const SERVICE_INTERVAL          = config.SERVICE_INTERVAL;
+const SQLITE_FILE               = config.SQLITE_FILE;
+const VOL_NETWORK               = config.VOL_NETWORK;
 
 const TRANSACTION_STATUS = {
     NEW:                'NEW',
@@ -52,10 +48,10 @@ const VOL_MAKER = {
 };
 
 const HELP_TEXT = `
-    <bot>, account <account request> - paste an account request from your wallet to provision a new account.
-    <bot>, help - display again this very message you are reading right now.
-    <bot>, info - learn interesting facts about this bot.
-    <bot>, upgrade <node URL> - upgrade the node at this URL to a miner.
+    ${ BOT_PREFIX }, account <account request> - paste an account request from your wallet to provision a new account.
+    ${ BOT_PREFIX }, help - display again this very message you are reading right now.
+    ${ BOT_PREFIX }, info - learn interesting facts about this bot.
+    ${ BOT_PREFIX }, upgrade <node URL> - upgrade the node at this URL to a miner.
 `
 
 //----------------------------------------------------------------//
@@ -158,18 +154,16 @@ class Volbot {
     //----------------------------------------------------------------//
     async connect ( login ) {
 
-        this.networks = _.cloneDeep ( consts.VOL_NETWORKS );
-
-        this.accountID      = consts.VOL_NETWORK.accountID;
-        this.genesis        = consts.VOL_NETWORK.genesis;
-        this.friendlyName   = consts.VOL_NETWORK.friendlyName;
-        this.miners         = consts.VOL_NETWORK.miners;
-        this.keyfile        = consts.VOL_NETWORK.keyfile;
+        this.accountID      = VOL_NETWORK.accountID;
+        this.genesis        = VOL_NETWORK.genesis;
+        this.friendlyName   = VOL_NETWORK.friendlyName;
+        this.miners         = VOL_NETWORK.miners;
+        this.keyfile        = VOL_NETWORK.keyfile;
 
         const phraseOrPEM = fs.readFileSync ( this.keyfile, 'utf8' );
         this.key = await crypto.loadKeyAsync ( phraseOrPEM );
 
-        this.db = new sqlite3 ( 'sqlite.db' );
+        this.db = new sqlite3 ( SQLITE_FILE );
 
         this.db.prepare (`
             CREATE TABLE IF NOT EXISTS transactions (
@@ -288,11 +282,13 @@ class Volbot {
         
         if ( prefix != BOT_PREFIX ) return;
 
-        if ( message.channel.name !== 'volbot' ) {
-            message.reply ( `sorry, I only do stuff for people in the #volbot channel.` );
-        }
-
         const command       = tokens.shift ().toLowerCase ();
+        const restriction   = COMMAND_RESTRICTIONS [ command ];
+
+        if ( restriction && !restriction.includes ( message.channel.id )) {
+            message.reply ( `sorry, that command is not available in this channel.` );
+            return;
+        }
 
         switch ( command ) {
 

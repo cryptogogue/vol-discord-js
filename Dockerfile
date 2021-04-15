@@ -32,7 +32,5 @@ RUN npm install \
 
 COPY . /app
 
-EXPOSE 7777
-# CMD tail -f /dev/null # keep running
 ENTRYPOINT [ "npm" ]
-CMD [ "run", "prod" ]
+CMD [ "start" ]

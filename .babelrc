@@ -11,6 +11,7 @@
                 ],
                 "alias": {
                     "fgc": "./src/packages/fgc-common-js-src/export-node",
+                    "vol": "./src/packages/vol-common-js-src/export"
                 }
             }
         ]

@@ -48,10 +48,10 @@ const VOL_MAKER = {
 };
 
 const HELP_TEXT = `
-    ${ BOT_PREFIX }, account <account request> - paste an account request from your wallet to provision a new account.
-    ${ BOT_PREFIX }, help - display again this very message you are reading right now.
-    ${ BOT_PREFIX }, info - learn interesting facts about this bot.
-    ${ BOT_PREFIX }, upgrade <node URL> - upgrade the node at this URL to a miner.
+    ${ BOT_PREFIX } account <account request> - paste an account request from your wallet to provision a new account.
+    ${ BOT_PREFIX } help - display again this very message you are reading right now.
+    ${ BOT_PREFIX } info - learn interesting facts about this bot.
+    ${ BOT_PREFIX } upgrade <node URL> - upgrade the node at this URL to a miner.
 `
 
 //----------------------------------------------------------------//
@@ -446,6 +446,10 @@ class Volbot {
             suffix:     vol.makeAccountSuffix (),
             key:        request.key,
             grant:      0,
+        }
+
+        if ( request.signature ) {
+            params.signature = request.signature;
         }
 
         this.scheduleTransaction ( message, TRANSACTION_TYPE.OPEN_ACCOUNT, params );

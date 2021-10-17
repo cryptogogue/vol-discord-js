@@ -49,7 +49,7 @@ const VOL_MAKER = {
 
 const HELP_TEXT = `
     ${ BOT_PREFIX } account <account request> - paste an account request from your wallet to provision a new account.
-    ${ BOT_PREFIX } help - display again this very message you are reading right now.
+    ${ BOT_PREFIX } help - display again this very message you are reading now.
     ${ BOT_PREFIX } info - learn interesting facts about this bot.
     ${ BOT_PREFIX } upgrade <node URL> - upgrade the node at this URL to a miner.
 `
@@ -423,12 +423,12 @@ class Volbot {
         console.log ( 'DECODED ACCOUNT REQUEST:', request );
 
         if ( !request.genesis ) {
-            message.reply ( `that account request is missing a genesis hash. Try again.` );
+            message.reply ( `that account request is missing a genesis hash. If you are using VOLWAL, make sure it is at least verion 0.1.72.` );
             return;
         }
 
         if ( !request.key ) {
-            message.reply ( `that account request is missing a public key. Try again.` );
+            message.reply ( `that account request is missing a public key. If you are using VOLWAL, make sure it is at least verion 0.1.72.` );
             return;
         }
 

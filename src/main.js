@@ -120,6 +120,8 @@ class Volbot {
 
         let resultCount     = 0;
         let acceptedCount   = 0;
+        let rejectedCount   = 0;
+        let message         = false;
 
         for ( let result of results ) {
 
@@ -135,8 +137,13 @@ class Volbot {
                     break;
 
                 case 'REJECTED':
-                    if ( result.uuid === row.uuid ) return TRANSACTION_STATUS.REJECTED;
-                    putTransaction ( result.url );
+                    if ( result.uuid !== row.uuid ) {
+                        putTransaction ( result.url );
+                    }
+                    else {
+                        rejectedCount++;
+                        message = message || result.message;
+                    }
                     break;
 
                 case 'UNKNOWN':
@@ -148,7 +155,10 @@ class Volbot {
             }
         }
 
-        return ( acceptedCount === resultCount ) ? TRANSACTION_STATUS.ACCEPTED : TRANSACTION_STATUS.PENDING;
+        if ( acceptedCount === resultCount  ) return { status: TRANSACTION_STATUS.ACCEPTED };
+        if ( rejectedCount === resultCount  ) return { status: TRANSACTION_STATUS.REJECTED, message: message };
+
+        return { status: TRANSACTION_STATUS.PENDING };
     }
 
     //----------------------------------------------------------------//
@@ -270,6 +280,21 @@ class Volbot {
     }
 
     //----------------------------------------------------------------//
+    async notifyRejectedAsync ( row, message ) {
+
+        if ( !( row.channel && row.mention )) return;
+        const channel = await this.client.channels.fetch ( row.channel );
+        if ( !channel ) return;
+
+        const params = JSON.parse ( row.params );
+
+        const why = message ? `I was sent the following message: '${ message }' Hope that's useful!` : `I wasn't told why. Sorry!`;
+
+        const accountName = `.${ this.accountID }.${ params.suffix }`;
+        channel.send ( `Alas, <@${ row.mention }>, your transaction of type ${ row.type } was REJECTED. ${ why }` );
+    }
+
+    //----------------------------------------------------------------//
     async onMessage ( message ) {
 
         if ( message.author.bot ) return;
@@ -369,15 +394,16 @@ class Volbot {
 
         for ( let row of rows ) {
 
-            const status = await this.checkTransactionStatusAsync ( row );
+            const result = await this.checkTransactionStatusAsync ( row );
 
-            if ( status === TRANSACTION_STATUS.ACCEPTED ) {
+            if ( result.status === TRANSACTION_STATUS.ACCEPTED ) {
                 this.db.prepare ( `UPDATE transactions SET status = 'ACCEPTED' WHERE id = ?` ).run ( row.id );
                 await this.notifyAcceptedAsync ( row );
             }
-            else if ( status === TRANSACTION_STATUS.REJECTED ) {
+            else if ( result.status === TRANSACTION_STATUS.REJECTED ) {
                 this.db.prepare ( `UPDATE transactions SET status = 'REJECTED' WHERE id = ?` ).run ( row.id );
                 this.db.prepare ( `UPDATE transactions SET status = 'PENDING' WHERE status = 'NEW'` );
+                await this.notifyRejectedAsync ( row, result.message );
                 return;
             }
         }
@@ -432,6 +458,11 @@ class Volbot {
             return;
         }
 
+        if ( !request.signature ) {
+            message.reply ( `that account request is missing a signed ToS agreement. If you are using VOLWAL, did you see the ToS popup when you created the account request? If not, please report that as a bug.` );
+            return;
+        }
+
         if ( this.genesis !== request.genesis ) {
             message.reply ( `sorry, I don't recognize that network.` );
             return;
@@ -445,11 +476,8 @@ class Volbot {
         const params = {
             suffix:     vol.makeAccountSuffix (),
             key:        request.key,
+            signature:  request.signature,
             grant:      0,
-        }
-
-        if ( request.signature ) {
-            params.signature = request.signature;
         }
 
         this.scheduleTransaction ( message, TRANSACTION_TYPE.OPEN_ACCOUNT, params );

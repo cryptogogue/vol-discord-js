@@ -11,9 +11,9 @@ import Discord                      from 'discord.js';
 import * as env                     from 'env';
 import { assert, crypto, util }     from 'fgc';
 import fs                           from 'fs';
-import fetch                        from 'node-fetch';
+import fetch                        from 'cross-fetch';
 import url                          from 'url';
-import { vol }                      from 'vol';
+import * as vol                     from 'vol';
 import _                            from 'lodash';
 
 // https://discord.js.org/#/
@@ -26,9 +26,7 @@ const SQLITE_FILE               = config.SQLITE_FILE;
 const VOL_NETWORK               = config.VOL_NETWORK;
 
 const TRANSACTION_STATUS = {
-    NEW:                'NEW',
-    PENDING:            'PENDING',
-    ACCEPTED:           'ACCEPTED',
+    NEW:                'NEW',PENDINGACCEPTED:           'ACCEPTED',
     REJECTED:           'REJECTED',
     INCOMPLETE:         'INCOMPLETE',
 }
@@ -48,10 +46,12 @@ const VOL_MAKER = {
 };
 
 const HELP_TEXT = `
-    ${ BOT_PREFIX } account <account request> - paste an account request from your wallet to provision a new account.
-    ${ BOT_PREFIX } help - display again this very message you are reading now.
-    ${ BOT_PREFIX } info - learn interesting facts about this bot.
-    ${ BOT_PREFIX } upgrade <node URL> - upgrade the node at this URL to a miner.
+    ${ BOT_PREFIX } ${ BOT_COMMANDS.ACCOUNT } <account request> - paste an account request from your wallet to provision a new account.
+    ${ BOT_PREFIX } ${ BOT_COMMANDS.CONSENSUS } - report the current chain height and current miners.
+    ${ BOT_PREFIX } ${ BOT_COMMANDS.HELP } - display again this very message.
+    ${ BOT_PREFIX } ${ BOT_COMMANDS.INFO } - learn interesting facts about this bot.
+    ${ BOT_PREFIX } ${ BOT_COMMANDS.TX } - display the queue of unsent transactions.
+    ${ BOT_PREFIX } ${ BOT_COMMANDS.UPGRADE } <node URL> - upgrade the node at this URL to a miner.
 `
 
 //----------------------------------------------------------------//
@@ -72,16 +72,16 @@ class Volbot {
     }
 
     //----------------------------------------------------------------//
-    async checkTransactionStatusAsync ( row ) {
+    async checkTransactionStatusAsync ( uuid, envelope ) {
+
+        console.log ( 'ENVELOPW', envelope );
 
         const checkStatus = async ( nodeURL ) => {
 
+            console.log ( 'CHECK STATUS' );
+
             try {
-
-                let accountURL          = url.parse ( nodeURL );
-                accountURL.pathname     = `/accounts/${ this.accountID }/transactions/${ row.uuid }`;
-                accountURL              = url.format ( accountURL );
-
+                const accountURL        = this.consensusService.formatServiceURL ( nodeURL, `/accounts/${ this.accountID }/transactions/${ uuid }`, false, true );
                 const result            = await fetchJSON ( accountURL );
                 result.url              = accountURL;
 
@@ -93,7 +93,9 @@ class Volbot {
             return false;
         }
 
-        const putTransaction = async ( nodeURL ) => {
+        const putTransactionAsync = async ( nodeURL ) => {
+
+            console.log ( 'PUT TX' );
 
             let result = false;
 
@@ -101,19 +103,18 @@ class Volbot {
                 result = await fetchJSON ( nodeURL, {
                     method :    'PUT',
                     headers :   { 'content-type': 'application/json' },
-                    body :      row.envelope,
+                    body :      JSON.stringify ( envelope ),
                 });
             }
             catch ( error ) {
                 console.log ( 'error or no response' );
                 console.log ( error );
             }
-
             return ( result && ( result.status === 'OK' ));
         }
 
         const promises = [];
-        for ( let nodeURL of this.miners ) {
+        for ( let nodeURL of this.consensusService.currentURLs ) {
             promises.push ( checkStatus ( nodeURL ));
         }
         const results = await Promise.all ( promises );
@@ -128,17 +129,19 @@ class Volbot {
             if ( !result ) continue;
             resultCount++;
 
-            console.log ( 'processTransaction RESULT', result );
+            console.log ( result );
 
             switch ( result.status ) {
 
                 case 'ACCEPTED':
+                    console.log ( 'ACCEPTED:', result.url );
                     acceptedCount++;
                     break;
 
                 case 'REJECTED':
-                    if ( result.uuid !== row.uuid ) {
-                        putTransaction ( result.url );
+                    console.log ( 'REJECTED:', result.url );
+                    if ( result.uuid !== uuid ) {
+                        await putTransactionAsync ( result.url );
                     }
                     else {
                         rejectedCount++;
@@ -147,7 +150,8 @@ class Volbot {
                     break;
 
                 case 'UNKNOWN':
-                    putTransaction ( result.url );
+                    console.log ( 'UNKNOWN:', result.url );
+                    await putTransactionAsync ( result.url );
                     break;
 
                 default:
@@ -158,7 +162,7 @@ class Volbot {
         if ( acceptedCount === resultCount  ) return { status: TRANSACTION_STATUS.ACCEPTED };
         if ( rejectedCount === resultCount  ) return { status: TRANSACTION_STATUS.REJECTED, message: message };
 
-        return { status: TRANSACTION_STATUS.PENDING };
+        return { status: TRANSACTION_STATUS.NEW };
     }
 
     //----------------------------------------------------------------//
@@ -167,7 +171,6 @@ class Volbot {
         this.accountID      = VOL_NETWORK.accountID;
         this.genesis        = VOL_NETWORK.genesis;
         this.friendlyName   = VOL_NETWORK.friendlyName;
-        this.miners         = VOL_NETWORK.miners;
         this.keyfile        = VOL_NETWORK.keyfile;
 
         const phraseOrPEM = fs.readFileSync ( this.keyfile, 'utf8' );
@@ -182,7 +185,6 @@ class Volbot {
                 type            TEXT            NOT NULL,
                 status          TEXT            NOT NULL DEFAULT 'NEW',
                 params          TEXT            NOT NULL,
-                nonce           INTEGER         NOT NULL DEFAULT 0,
                 envelope        TEXT            NOT NULL DEFAULT '',
                 channel         TEXT            NOT NULL DEFAULT '',
                 mention         TEXT            NOT NULL DEFAULT ''
@@ -197,6 +199,15 @@ class Volbot {
             this.client.login ( env.BOT_TOKEN );
         }
 
+        console.log ( 'Starting consensus...' );
+
+        this.consensusService = new vol.ConsensusService ();
+        await this.consensusService.initializeWithNodeURLAsync ( VOL_NETWORK.primaryURL );
+        await this.consensusService.discoverMinersAsync ();
+
+        console.log ( 'Current miners:', JSON.stringify ( this.consensusService.currentURLs ));
+
+        this.consensusService.startServiceLoopAsync ();
         this.serviceLoop ();
     }
 
@@ -208,36 +219,16 @@ class Volbot {
     //----------------------------------------------------------------//
     async findNonceAsync () {
 
-        const getNonce = async ( nodeURL ) => {
+        try {
+            const accountURL        = this.consensusService.getServiceURL ( `/accounts/${ this.accountID }` );
+            let result              = await fetchJSON ( accountURL );
 
-            try {
-
-                const accountURL        = url.parse ( nodeURL );
-                accountURL.pathname     = `/accounts/${ this.accountID }`;
-                let result              = await fetchJSON ( url.format ( accountURL ));
-
-                return result && result.account && result.account.nonce;
-            }
-            catch ( error ) {
-                console.log ( error );
-            }
-            return false;
+            return result && result.account && result.account.nonce;
         }
-
-        const promises = [];
-        for ( let nodeURL of this.miners ) {
-            promises.push ( getNonce ( nodeURL ));
+        catch ( error ) {
+            console.log ( error );
         }
-        const results = await Promise.all ( promises );
-
-        if ( !results.length ) return false;
-
-        const nonce = results [ 0 ];
-
-        for ( let result of results ) {
-            if ( result !== nonce ) return false;
-        }
-        return nonce;
+        return false;
     }
 
     //----------------------------------------------------------------//
@@ -252,7 +243,7 @@ class Volbot {
         body.uuid       = uuid;
         body.maker      = maker;
 
-        return vol.signTransaction ( this.key, body, nonce );
+        return vol.util.signTransaction ( this.key, body, nonce );
     }
 
     //----------------------------------------------------------------//
@@ -288,7 +279,7 @@ class Volbot {
 
         const params = JSON.parse ( row.params );
 
-        const why = message ? `I was sent the following message: '${ message }' Hope that's useful!` : `I wasn't told why. Sorry!`;
+        const why = message ? `I was sent the following message: '${ message }' Hope that's useful!` : `I wasn't told why. Sorry.`;
 
         const accountName = `.${ this.accountID }.${ params.suffix }`;
         channel.send ( `Alas, <@${ row.mention }>, your transaction of type ${ row.type } was REJECTED. ${ why }` );
@@ -322,6 +313,11 @@ class Volbot {
                 break;
             }
 
+            case BOT_COMMANDS.CONSENSUS: {
+                await this.reportConsensusAsync ( message );
+                break;
+            }
+
             case BOT_COMMANDS.HELP: {
                 message.reply ( `\`\`\`${ HELP_TEXT }\`\`\`` );
                 break;
@@ -329,6 +325,11 @@ class Volbot {
 
             case BOT_COMMANDS.INFO: {
                 message.reply ( `I am the bot that manages the ${ this.friendlyName } network. Its genesis hash is: \`\`\`${ this.genesis }\`\`\`` );
+                break;
+            }
+
+            case BOT_COMMANDS.TX: {
+                await this.reportTransactionsAsync ( message );
                 break;
             }
 
@@ -352,61 +353,53 @@ class Volbot {
     //----------------------------------------------------------------//
     async processQueueAsync () {
 
-        await this.processQueueAsync_newTransactions ();
-        await this.processQueueAsync_pendingTransactions ();
-    }
+        // send transactions one at a time
 
-    //----------------------------------------------------------------//
-    async processQueueAsync_newTransactions () {
-
-        // get all NEW transactions
-        //      if NEW transactions, find the nonce (all miners agree)
-        //      if no nonce, skip
-        //      prepare envelopes and update to PENDING
-
-        const rows = this.db.prepare ( `SELECT * FROM transactions WHERE status IS 'NEW'` ).all ();
-        if ( rows.length === 0 ) return;
+        const row = ( this.db.prepare ( `SELECT * FROM transactions WHERE status IS 'NEW'` ).all ())[ 0 ];
+        if ( !row ) return;
 
         let nonce = await this.findNonceAsync ();
         if ( nonce === false ) return;
 
-        for ( let row of rows ) {
-            const params = JSON.parse ( row.params );
-            const envelope = this.makeTransaction ( row.type, params, row.uuid, nonce++ );
+        const params    = JSON.parse ( row.params );
+        const envelope  = this.makeTransaction ( row.type, params, row.uuid, nonce );
 
-            this.db.prepare (`
-                UPDATE transactions SET status = 'PENDING', envelope = ? WHERE id = ?
-            `).run ( JSON.stringify ( envelope ), row.id );
+        const result = await this.checkTransactionStatusAsync ( row.uuid, envelope );
+
+        if ( result.status === TRANSACTION_STATUS.ACCEPTED ) {
+            this.db.prepare ( `UPDATE transactions SET status = 'ACCEPTED' WHERE id = ?` ).run ( row.id );
+            await this.notifyAcceptedAsync ( row );
+        }
+        else if ( result.status === TRANSACTION_STATUS.REJECTED ) {
+            this.db.prepare ( `UPDATE transactions SET status = 'REJECTED' WHERE id = ?` ).run ( row.id );
+            await this.notifyRejectedAsync ( row, result.message );
+            return;
         }
     }
 
     //----------------------------------------------------------------//
-    async processQueueAsync_pendingTransactions () {
+    async reportConsensusAsync ( message ) {
 
-        // get all PENDING transactions
-        //      check status with all miners
-        //      if any UNKNOWN, resubmit
-        //      if all ACCEPTED, mark as ACCEPTED
-        //      if any REJECTED, mark REJECTED then reset all PENDING to NEW
+        const consensusService = this.consensusService;
+        const currentMiners = `\`\`\`${ consensusService.currentMinerIDs.join ( '\n' )}\`\`\``;
+        message.reply ( `current height is ${ consensusService.height }.${ currentMiners } ` );
+    }
 
-        const rows = this.db.prepare ( `SELECT * FROM transactions WHERE status IS 'PENDING'` ).all ();
-        if ( rows.length === 0 ) return;
+    //----------------------------------------------------------------//
+    async reportTransactionsAsync ( message ) {
 
-        for ( let row of rows ) {
-
-            const result = await this.checkTransactionStatusAsync ( row );
-
-            if ( result.status === TRANSACTION_STATUS.ACCEPTED ) {
-                this.db.prepare ( `UPDATE transactions SET status = 'ACCEPTED' WHERE id = ?` ).run ( row.id );
-                await this.notifyAcceptedAsync ( row );
-            }
-            else if ( result.status === TRANSACTION_STATUS.REJECTED ) {
-                this.db.prepare ( `UPDATE transactions SET status = 'REJECTED' WHERE id = ?` ).run ( row.id );
-                this.db.prepare ( `UPDATE transactions SET status = 'PENDING' WHERE status = 'NEW'` );
-                await this.notifyRejectedAsync ( row, result.message );
-                return;
-            }
+        const rows = this.db.prepare ( `SELECT * FROM transactions WHERE status IS 'NEW'` ).all ();
+        if ( rows.length === 0 ) {
+            message.reply ( 'no unsent transactions.' );
+            return;
         }
+
+        const lines = [];
+        for ( let row of rows ) {
+            lines.push ( `${ row.type } ${ row.uuid }` );
+        }
+        const report = `\`\`\`${ lines.join ( '\n' )}\`\`\``;
+        message.reply ( `${ report }` );
     }
 
     //----------------------------------------------------------------//
@@ -439,7 +432,7 @@ class Volbot {
             return;
         }
         
-        const request = vol.decodeAccountRequest ( encoded );
+        const request = vol.util.decodeAccountRequest ( encoded );
 
         if ( !request ) {
             message.reply ( `I could not decode that account request.` );
@@ -474,7 +467,7 @@ class Volbot {
         }
 
         const params = {
-            suffix:     vol.makeAccountSuffix (),
+            suffix:     vol.util.makeAccountSuffix (),
             key:        request.key,
             signature:  request.signature,
             grant:      0,
@@ -527,10 +520,8 @@ class Volbot {
 
             assert ( minerID !== false );
 
-            const accountURL = url.parse ( this.miners [ 0 ]);
-            accountURL.pathname = `/accounts/${ minerID }`;
-
-            const response = await fetchJSON ( `${ url.format ( accountURL )}` );
+            const accountURL = this.consensusService.getServiceURL ( `/accounts/${ minerID }` );
+            const response = await fetchJSON ( accountURL );
             assert ( response );
 
             const account = response.account;

@@ -185,7 +185,6 @@ class Volbot {
                 type            TEXT            NOT NULL,
                 status          TEXT            NOT NULL DEFAULT 'NEW',
                 params          TEXT            NOT NULL,
-                envelope        TEXT            NOT NULL DEFAULT '',
                 channel         TEXT            NOT NULL DEFAULT '',
                 mention         TEXT            NOT NULL DEFAULT ''
             )
